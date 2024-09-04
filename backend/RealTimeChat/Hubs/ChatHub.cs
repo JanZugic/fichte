@@ -22,11 +22,55 @@ namespace RealTimeChat.Hubs
             _context = context;
         }
 
+        // Метод для создания сервера (комнаты)
+        public async Task<int> CreateServer(string roomName, string password)
+        {
+            var creatorId = Context.UserIdentifier; // Получаем ID пользователя
+
+            var room = new Room
+            {
+                RoomName = roomName,
+                CreatorId = int.Parse(creatorId), // Преобразование строки в целое число
+                Password = password // Добавляем пароль (если нужно)
+            };
+
+            _context.Rooms.Add(room);
+            await _context.SaveChangesAsync();
+
+            // Добавляем создателя в группу SignalR
+            await Groups.AddToGroupAsync(Context.ConnectionId, room.RoomId.ToString());
+
+            return room.RoomId;
+        }
+
+        // Метод для подключения к существующему серверу
+        public async Task<bool> ConnectToServer(int roomId, string password)
+        {
+            var userId = Context.UserIdentifier; // Получаем ID пользователя
+            var room = await _context.Rooms.FindAsync(roomId);
+
+            if (room == null)
+            {
+                throw new HubException("Server not found.");
+            }
+
+            // Проверка пароля, если он установлен
+            if (!string.IsNullOrEmpty(room.Password) && room.Password != password)
+            {
+                throw new HubException("Incorrect password.");
+            }
+
+            // Добавляем пользователя в группу SignalR
+            await Groups.AddToGroupAsync(Context.ConnectionId, room.RoomId.ToString());
+
+            return true;
+        }
+
         // Метод для отправки сообщения в чат
         public async Task SendMessage(int roomId, string content)
         {
             var senderId = Context.UserIdentifier; // Или другой способ получения ID пользователя
-            var sender = await _context.Users.FindAsync(senderId);
+            var sender = await _context.Users.FindAsync(int.Parse(senderId));
 
             if (sender == null)
             {

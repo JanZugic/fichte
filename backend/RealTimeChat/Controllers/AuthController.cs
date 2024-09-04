@@ -24,6 +24,7 @@ namespace RealTimeChat.Controllers
         }
 
         // Регистрация пользователя
+
         [HttpPost("register")]
         public async Task<IActionResult> Register([FromBody] RegisterModel model)
         {
@@ -65,7 +66,7 @@ namespace RealTimeChat.Controllers
             {
                 Subject = new ClaimsIdentity(new Claim[]
                 {
-                    new Claim(ClaimTypes.Name, user.Username)
+                    new Claim("UserId", user.UserId.ToString())
                 }),
                 Expires = DateTime.UtcNow.AddHours(1),
                 SigningCredentials = new SigningCredentials(new SymmetricSecurityKey(key), SecurityAlgorithms.HmacSha256Signature),

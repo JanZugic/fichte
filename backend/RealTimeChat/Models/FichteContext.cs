@@ -59,6 +59,7 @@ public partial class FichteContext : DbContext
                 .HasDefaultValueSql("(getdate())")
                 .HasColumnType("datetime");
             entity.Property(e => e.CreatorId).HasColumnName("CreatorID");
+            entity.Property(e => e.Password).HasMaxLength(255);
             entity.Property(e => e.RoomName).HasMaxLength(100);
 
             entity.HasOne(d => d.Creator).WithMany(p => p.Rooms)

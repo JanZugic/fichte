@@ -60,8 +60,8 @@ const App = () => {
                     body: JSON.stringify(userData),
                 });
                 if (response.ok) {
-                    const { Token } = await response.json();
-                    localStorage.setItem("authToken", Token);
+                    const { token } = await response.json();
+                    localStorage.setItem("authToken", token);
                     setMode("waitingRoom"); // Переключаемся на waitingRoom после успешного логина
                 } else {
                     alert("Login failed.");
@@ -108,29 +108,29 @@ const App = () => {
         }
     };
 
-        // Создание нового сервера
-        const handleCreateServer = async (serverInfo) => {
-            try {
-                // Предположим, что у вас есть API для создания сервера
-                const response = await fetch("http://localhost:5022/api/servers/create", {
-                    method: "POST",
-                    headers: {
-                        "Content-Type": "application/json",
-                        "Authorization": `Bearer ${localStorage.getItem("authToken")}`
-                    },
-                    body: JSON.stringify(serverInfo),
-                });
-                if (response.ok) {
-                    const result = await response.json();
-                    setChatRoom(result.serverName); // Установить текущую комнату
-                    setMode("chat"); // Переключиться на экран чата
-                } else {
-                    alert("Failed to create server.");
-                }
-            } catch (error) {
-                console.error("Create server error:", error);
+    const handleCreateServer = async (serverInfo) => {
+        try {
+            const response = await fetch("http://localhost:5022/api/chat/create", {
+                method: "POST",
+                headers: {
+                    "Content-Type": "application/json",
+                    "Authorization": `Bearer ${localStorage.getItem("authToken")}`
+                },
+                body: JSON.stringify(serverInfo),
+            });
+            if (response.ok) {
+                const result = await response.json();
+                setChatRoom(result.ServerName);
+                setMode("chat");
+            } else {
+                alert("Failed to create server.");
             }
-        };
+        } catch (error) {
+            console.error("Create server error:", error);
+        }
+    };
+    
+    
 
     // Закрытие чата
     const closeChat = async () => {
@@ -180,7 +180,7 @@ const App = () => {
             )}
             {mode === "serverCreate" && (
                 <ServerCreateMenu
-                    onCreateServer={handleCreateServer}
+                    onCreate={handleCreateServer}
                     onBack={handleServerSelection}
                 />
             )}

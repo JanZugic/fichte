@@ -13,6 +13,8 @@ public partial class Room
 
     public DateTime? CreatedAt { get; set; }
 
+    public string? Password { get; set; }
+
     public virtual User Creator { get; set; } = null!;
 
     public virtual ICollection<Message> Messages { get; set; } = new List<Message>();
