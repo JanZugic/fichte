@@ -47,7 +47,7 @@ namespace RealTimeChat.Controllers
                 RoomId = room.RoomId
             };
 
-            JoinChat(joinChat);
+            await JoinChat(joinChat);
 
             return Ok(new
             {
@@ -62,7 +62,15 @@ namespace RealTimeChat.Controllers
         [HttpPost("send-message")]
         public async Task<IActionResult> SendMessage([FromBody] SendMessageDto sendMessageDto)
         {
-            var sender = await _context.Users.FindAsync(sendMessageDto.UserId);
+            // Получение UserId из Claims
+            var userIdClaim = User.Claims.FirstOrDefault(c => c.Type == "UserId");
+
+            if (userIdClaim == null || !int.TryParse(userIdClaim.Value, out int senderId))
+            {
+                return BadRequest("Invalid CreatorId: User does not exist.");
+            }
+
+            var sender = await _context.Users.FindAsync(senderId);
             if (sender == null)
             {
                 return NotFound("User not found.");
@@ -72,6 +80,7 @@ namespace RealTimeChat.Controllers
             {
                 RoomId = sendMessageDto.RoomId,
                 SenderId = sender.UserId,
+                MessageType = "message",
                 Content = sendMessageDto.Message,
                 SentAt = DateTime.UtcNow
             };
@@ -100,16 +109,39 @@ namespace RealTimeChat.Controllers
             return Ok(messages);
         }
 
-        // Получение списка всех комнат
         [HttpGet("rooms")]
         public async Task<IActionResult> GetAllRooms()
         {
-            var rooms = await _context.Rooms
-                .Select(r => new { r.RoomId, r.RoomName })
-                .ToListAsync();
+            try
+            {
+                // Получение UserId из Claims
+                var userIdClaim = User.Claims.FirstOrDefault(c => c.Type == "UserId");
+                if (userIdClaim == null || !int.TryParse(userIdClaim.Value, out int userId))
+                {
+                    return BadRequest("Invalid UserId: User does not exist.");
+                }
 
-            return Ok(rooms);
+                // Получение комнат, к которым привязан пользователь
+                var rooms = await _context.RoomMembers
+                    .AsNoTracking()
+                    .Where(rm => rm.UserId == userId)
+                    .Select(rm => new
+                    {
+                        rm.Room.RoomId,
+                        rm.Room.RoomName
+                    })
+                    .ToListAsync();
+
+                return Ok(rooms);
+            }
+            catch (Exception ex)
+            {
+                // Логирование ошибки
+                Console.WriteLine($"Exception: {ex.Message}");
+                return StatusCode(StatusCodes.Status500InternalServerError, "Internal server error");
+            }
         }
+
 
         [HttpPost("join-chat")]
         public async Task<IActionResult> JoinChat([FromBody] JoinChatDto joinChatDto)
@@ -124,7 +156,7 @@ namespace RealTimeChat.Controllers
                 }
 
                 // Проверка существования комнаты
-                var room =  _context.Rooms
+                var room = await _context.Rooms
                     .AsNoTracking()
                     .SingleOrDefaultAsync(r => r.RoomId == joinChatDto.RoomId);
 
@@ -134,7 +166,7 @@ namespace RealTimeChat.Controllers
                 }
 
                 // Проверка существования пользователя
-                var user =  _context.Users
+                var user = await _context.Users
                     .AsNoTracking()
                     .SingleOrDefaultAsync(u => u.UserId == userId);
 
@@ -179,8 +211,54 @@ namespace RealTimeChat.Controllers
             }
         }
 
+        [HttpPost("leave-chat")]
+        public async Task<IActionResult> LeaveChat([FromBody] LeaveChatDto leaveChatDto)
+        {
+            try
+            {
+                // Получение UserId из Claims
+                var userIdClaim = User.Claims.FirstOrDefault(c => c.Type == "UserId");
+                if (userIdClaim == null || !int.TryParse(userIdClaim.Value, out int userId))
+                {
+                    return BadRequest("Invalid UserId: User does not exist.");
+                }
+
+                // Проверка существования связи между пользователем и комнатой
+                var roomMember = await _context.RoomMembers
+                    .SingleOrDefaultAsync(rm => rm.RoomId == leaveChatDto.roomId && rm.UserId == userId);
+
+                if (roomMember == null)
+                {
+                    return BadRequest("User is not a member of the room.");
+                }
+
+                // Удаление связи
+                _context.RoomMembers.Remove(roomMember);
+                await _context.SaveChangesAsync();
+
+                return Ok(new
+                {
+                    RoomId = leaveChatDto.roomId,
+                    UserId = userId,
+                    Message = "You have successfully left the room."
+                });
+            }
+            catch (Exception ex)
+            {
+                // Логирование ошибки
+                Console.WriteLine($"Exception: {ex.Message}");
+                return StatusCode(StatusCodes.Status500InternalServerError, "Internal server error");
+            }
+        }
 
     }
+
+    // DTO для выхода из комнаты
+    public class LeaveChatDto
+    {
+        public int roomId { get; set; }
+    }
+
 
     // DTO для присоединения к комнате
     public class JoinChatDto

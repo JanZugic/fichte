@@ -1,11 +1,17 @@
-export const Message = ({ messageInfo }) => {
-	return (
-		<div className="w-fit ">
-			<span className="text-sm text-slate-600">{messageInfo.userName}</span>
-			<div className="p-2 bg-gray-100 rounded-lg shadow-md">
-				{console.log(messageInfo)}
-				{messageInfo.message}
-			</div>
-		</div>
-	);
+import React from 'react';
+
+export const Message = ({ messageInfo, currentUserName }) => {
+    const isSentByCurrentUser = messageInfo.userName === currentUserName;
+
+    return (
+        <div className={`w-fit ${isSentByCurrentUser ? 'text-right' : 'text-left'}`}>
+            <span className="text-sm text-slate-600">{messageInfo.userName} {messageInfo.sentAt}</span>
+            <div
+                className={`p-2 rounded-lg shadow-md ${isSentByCurrentUser ? 'bg-blue-100' : 'bg-gray-100'} ${isSentByCurrentUser ? 'ml-auto' : ''}`}
+            >
+                {console.log(messageInfo)}
+                {messageInfo.content}
+            </div>
+        </div>
+    );
 };

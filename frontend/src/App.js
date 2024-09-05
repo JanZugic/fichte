@@ -1,4 +1,3 @@
-// src/App.js
 import { useState, useEffect } from "react";
 import { Auth } from "./components/Auth.jsx";
 import { Chat } from "./components/Chat.jsx";
@@ -10,8 +9,10 @@ import { HubConnectionBuilder } from "@microsoft/signalr";
 const App = () => {
     const [connection, setConnection] = useState(null);
     const [messages, setMessages] = useState([]);
-    const [chatRoom, setChatRoom] = useState("");
+    const [roomId, setChatRoomId] = useState(null); // Использование ID комнаты
+    const [chatRoomName, setChatRoomName] = useState(""); // Для отображения имени комнаты
     const [mode, setMode] = useState("none");
+    const [servers, setServers] = useState([]); // Список серверов
 
     // Создание подключения и установка обработчиков
     const initializeConnection = async () => {
@@ -22,19 +23,50 @@ const App = () => {
                 })
                 .withAutomaticReconnect()
                 .build();
-
+    
             connection.on("ReceiveMessage", (userName, message) => {
-                setMessages((messages) => [...messages, { userName, message }]);
+                setMessages((prevMessages) => [...prevMessages, { userName, message }]);
             });
-
+    
             connection.on("LoadMessages", (messages) => {
                 setMessages(messages);
             });
-
+    
+            connection.onclose((error) => {
+                console.error("SignalR connection closed due to error: ", error);
+                // Optionally, you can add logic to retry connection here
+            });
+    
+            connection.onreconnecting((error) => {
+                console.warn("SignalR connection lost due to error: ", error);
+            });
+    
+            connection.onreconnected((connectionId) => {
+                console.log("SignalR connection reestablished with connection ID: ", connectionId);
+            });
+    
             await connection.start();
             setConnection(connection);
         } catch (error) {
             console.error("Connection error:", error);
+        }
+    };
+    // Загрузка серверов
+    const loadServers = async () => {
+        try {
+            const response = await fetch("http://localhost:5022/api/chat/rooms", {
+                headers: {
+                    "Authorization": `Bearer ${localStorage.getItem("authToken")}`
+                }
+            });
+            if (response.ok) {
+                const serverList = await response.json();
+                setServers(serverList);
+            } else {
+                console.error("Failed to load servers.");
+            }
+        } catch (error) {
+            console.error("Error loading servers:", error);
         }
     };
 
@@ -74,8 +106,11 @@ const App = () => {
 
     // Обработка подключения к серверу
     const handleServerConnect = (serverInfo) => {
-        setChatRoom(serverInfo.serverName); // Установить текущую комнату
-        setMode("chat"); // Переключиться на экран чата
+        console.log("Connecting to server:", serverInfo);
+        setChatRoomId(serverInfo.roomId); // Установить текущую комнату по ID
+        setChatRoomName(serverInfo.serverName); // Сохранить имя комнаты для отображения
+
+        setMode("chat"); // Переключиться на экран чата после подключения
     };
 
     // Возвращение к экрану выбора сервера
@@ -83,31 +118,37 @@ const App = () => {
         setMode("waitingRoom"); // Вернуться в waitingRoom
     };
 
-    // Возвращение к экрану выбора сервера
-    const handleServerSelection = () => {
-        setMode("chat"); // Вернуться к выбору сервера
-    };
-
     const handleServerCreateMenu = () => {
-        setMode("serverCreate"); // Вернуться к выбору сервера
+        setMode("serverCreate");
     };
 
-        // Возвращение к экрану выбора сервера
-        const handleAddServer = () => {
-            setMode("serverSelection"); // Вернуться к выбору сервера
-        };
+    const handleAddServer = () => {
+        setMode("serverSelection");
+    };
 
     // Отправка сообщения в текущую комнату
     const sendMessage = async (message) => {
-        if (connection && chatRoom) {
+        if (connection && roomId) {
             try {
-                await connection.invoke("SendMessage", chatRoom, message);
+                await fetch("http://localhost:5022/api/chat/send-message", {
+                    method: "POST",
+                    headers: {
+                        "Content-Type": "application/json",
+                        "Authorization": `Bearer ${localStorage.getItem("authToken")}`
+                    },
+                    body: JSON.stringify({
+                        RoomId: roomId,
+                        Message: message
+                    })
+                });
             } catch (error) {
                 console.error("Send message error:", error);
             }
         }
     };
+    
 
+    // Создание нового сервера
     const handleCreateServer = async (serverInfo) => {
         try {
             const response = await fetch("http://localhost:5022/api/chat/create", {
@@ -120,7 +161,8 @@ const App = () => {
             });
             if (response.ok) {
                 const result = await response.json();
-                setChatRoom(result.ServerName);
+                setChatRoomId(result.ServerId); // Сохраняем ID новой комнаты
+                setChatRoomName(result.ServerName); // Имя комнаты для отображения
                 setMode("chat");
             } else {
                 alert("Failed to create server.");
@@ -129,18 +171,17 @@ const App = () => {
             console.error("Create server error:", error);
         }
     };
-    
-    
 
-    // Закрытие чата
+    // Закрытие чата и сброс состояния
     const closeChat = async () => {
         if (connection) {
             try {
-                await connection.stop();
+                await connection.stop(); // Остановка подключения SignalR
                 setConnection(null);
-                setMessages([]);
-                setMode("serverSelection"); // Возврат к выбору сервера
-                setChatRoom(""); // Сброс текущей комнаты
+                setMessages([]); // Очистка сообщений
+                setChatRoomId(null); // Сброс ID комнаты
+                setChatRoomName(""); // Сброс имени комнаты
+                setMode("waitingRoom"); // Возврат к выбору сервера
             } catch (error) {
                 console.error("Close chat error:", error);
             }
@@ -149,25 +190,34 @@ const App = () => {
 
     // Подключение и загрузка сообщений при авторизации
     useEffect(() => {
-        if (mode === "chat") {
+        if (mode === "chat" && !connection) {
             initializeConnection();
         }
     }, [mode]);
 
     // Загрузка истории сообщений при подключении к комнате
     useEffect(() => {
-        if (connection && chatRoom) {
-            connection.invoke("LoadChatHistory", chatRoom);
+        if (roomId && connection) {
+            console.log(`Chat room ID set to: ${roomId}`);
+            connection.invoke("LoadChatHistory", roomId);
         }
-    }, [connection, chatRoom]);
+    }, [roomId, connection]);
+
+    // Загрузка серверов при переходе в режим выбора сервера
+    useEffect(() => {
+        if (mode === "waitingRoom") {
+            loadServers();
+        }
+    }, [mode]);
 
     return (
         <div className="min-h-screen flex items-center justify-center bg-gray-100">
             {mode === "none" && <Auth onAuth={handleAuth} />}
             {mode === "waitingRoom" && (
                 <WaitingRoom
-                    chatRoom={chatRoom}
-                    onServerSelect={handleServerSelection}
+                    servers={servers}
+                    chatRoom={chatRoomName}
+                    onServerSelect={handleServerConnect}
                     onBackToSelection={handleAddServer}
                 />
             )}
@@ -175,24 +225,26 @@ const App = () => {
                 <ServerSelection
                     onServerCreateMenu={handleServerCreateMenu}
                     onConnect={handleServerConnect}
-                    onBack={handleBackToChatList} // Передача функции возврата в chat list
+                    onBack={handleBackToChatList}
                 />
             )}
             {mode === "serverCreate" && (
                 <ServerCreateMenu
                     onCreate={handleCreateServer}
-                    onBack={handleServerSelection}
+                    onBack={handleServerConnect}
                 />
             )}
             {mode === "chat" && (
                 <Chat
-                    onServerSelect={handleServerSelection}
+                    servers={servers}
+                    onServerSelect={handleServerConnect}
                     onBackToSelection={handleAddServer}
                     messages={messages}
-                    sendMessage={sendMessage} // Передача функции отправки сообщения
-                    closeChat={closeChat} // Передача функции закрытия чата
-                    chatRoom={chatRoom}
-                    setChatRoom={setChatRoom}
+                    sendMessage={sendMessage}
+                    closeChat={closeChat}
+                    chatRoom={chatRoomName}
+                    roomId={roomId}
+                    setChatRoom={setChatRoomName}
                 />
             )}
         </div>

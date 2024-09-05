@@ -2,13 +2,7 @@
 import { Button, Heading, VStack, Box } from "@chakra-ui/react";
 
 // Компонент для меню серверов
-const ServerMenu = ({ onSelectServer, onBackToSelection }) => {
-    // Пример серверов, их можно динамически загружать
-    const servers = [
-        { name: "Server 1", id: 1 },
-        { name: "Server 2", id: 2 },
-    ];
-
+const ServerMenu = ({ servers, onSelectServer, onBackToSelection }) => {
     return (
         <Box
             width={{ base: "100%", md: "250px" }} // 100% на маленьких экранах, 250px на больших
@@ -35,11 +29,12 @@ const ServerMenu = ({ onSelectServer, onBackToSelection }) => {
                 {servers.map((server) => (
                     <Button
                         key={server.id}
+                        colorScheme="white"
                         width="full"
                         variant="outline"
                         onClick={() => onSelectServer(server)}
                     >
-                        {server.name}
+                        {server.roomName}
                     </Button>
                 ))}
             </VStack>
@@ -47,11 +42,11 @@ const ServerMenu = ({ onSelectServer, onBackToSelection }) => {
     );
 };
 
-export const WaitingRoom = ({ chatRoom, onServerSelect, onBackToSelection }) => {
+export const WaitingRoom = ({ servers, onServerSelect, onBackToSelection }) => {
     return (
         <div className="flex h-screen w-screen">
             {/* Server menu */}
-            <ServerMenu onSelectServer={onServerSelect} onBackToSelection={onBackToSelection} />
+            <ServerMenu servers={servers} onSelectServer={onServerSelect} onBackToSelection={onBackToSelection} />
 
             {/* Waiting room container */}
             <div className="flex-1 ml-[250px] p-8 bg-white flex flex-col justify-center items-center">
