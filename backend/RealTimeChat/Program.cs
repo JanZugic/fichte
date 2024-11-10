@@ -4,6 +4,8 @@ using RealTimeChat.Models;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.IdentityModel.Tokens;
 using System.Text;
+using CloudinaryDotNet;
+using CloudinaryDotNet.Actions;
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -28,10 +30,18 @@ builder.Services.AddSignalR();
 builder.Services.AddDbContext<FichteContext>(options =>
 {
     options.UseSqlServer(builder.Configuration.GetConnectionString("DefaultConnection"))
-           .EnableSensitiveDataLogging() // Включение логирования данных для отладки
-           .LogTo(Console.WriteLine, LogLevel.Information); // Логирование запросов
+           .EnableSensitiveDataLogging()
+           .LogTo(Console.WriteLine, LogLevel.Information);
 });
 
+// Cloudinary configuration
+var cloudinarySettings = builder.Configuration.GetSection("CloudinarySettings");
+var cloudinary = new Cloudinary(new Account(
+    cloudinarySettings["CloudName"],
+    cloudinarySettings["ApiKey"],
+    cloudinarySettings["ApiSecret"]
+));
+builder.Services.AddSingleton(cloudinary);
 
 builder.Services.AddAuthentication(JwtBearerDefaults.AuthenticationScheme)
     .AddJwtBearer(options =>
@@ -50,7 +60,6 @@ builder.Services.AddAuthentication(JwtBearerDefaults.AuthenticationScheme)
         };
     });
 
-
 var app = builder.Build();
 
 if (app.Environment.IsDevelopment())
@@ -62,13 +71,12 @@ app.UseHttpsRedirection();
 app.UseStaticFiles();
 app.UseRouting();
 
-// Применение политики CORS
 app.UseCors("AllowSpecificOrigins");
 
-app.UseAuthentication(); // Добавьте аутентификацию
+app.UseAuthentication();
 app.UseAuthorization();
 
 app.MapControllers();
-app.MapHub<ChatHub>("/chat");
+app.MapHub<ChatHub>("/chat").RequireAuthorization();
 
 app.Run();

@@ -19,7 +19,7 @@ public partial class User
 
     public bool? IsEmailConfirmed { get; set; }
 
-    public byte[]? ProfilePicture { get; set; }
+    public string? ProfilePicture { get; set; }
 
     public DateTime? CreatedAt { get; set; }
 

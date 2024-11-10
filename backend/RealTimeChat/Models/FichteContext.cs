@@ -21,6 +21,8 @@ public partial class FichteContext : DbContext
 
     public virtual DbSet<RoomMember> RoomMembers { get; set; }
 
+    public virtual DbSet<SystemMessage> SystemMessages { get; set; }
+
     public virtual DbSet<User> Users { get; set; }
 
     protected override void OnConfiguring(DbContextOptionsBuilder optionsBuilder)
@@ -87,6 +89,15 @@ public partial class FichteContext : DbContext
                 .HasConstraintName("FK__RoomMembe__UserI__4316F928");
         });
 
+        modelBuilder.Entity<SystemMessage>(entity =>
+        {
+            entity.HasKey(e => e.Id).HasName("PK__SystemMe__3214EC0789D877AB");
+
+            entity.Property(e => e.SentAt)
+                .HasDefaultValueSql("(getdate())")
+                .HasColumnType("datetime");
+        });
+
         modelBuilder.Entity<User>(entity =>
         {
             entity.HasKey(e => e.UserId).HasName("PK__Users__1788CCAC5406680B");
@@ -103,6 +114,7 @@ public partial class FichteContext : DbContext
             entity.Property(e => e.IsEmailConfirmed).HasDefaultValue(false);
             entity.Property(e => e.Name).HasMaxLength(50);
             entity.Property(e => e.PasswordHash).HasMaxLength(255);
+            entity.Property(e => e.ProfilePicture).HasMaxLength(255);
             entity.Property(e => e.Surname).HasMaxLength(50);
             entity.Property(e => e.Username).HasMaxLength(50);
         });

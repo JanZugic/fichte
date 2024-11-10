@@ -1,9 +1,13 @@
-﻿using Microsoft.AspNetCore.Authorization;
+﻿using CloudinaryDotNet.Actions;
+using CloudinaryDotNet;
+using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
 using RealTimeChat.Models;
 using System.Linq;
 using System.Threading.Tasks;
+using Microsoft.IdentityModel.Tokens;
+
 
 namespace RealTimeChat.Controllers
 {
@@ -13,100 +17,12 @@ namespace RealTimeChat.Controllers
     public class ChatController : ControllerBase
     {
         private readonly FichteContext _context;
+        private readonly Cloudinary _cloudinary;
 
-        public ChatController(FichteContext context)
+        public ChatController(Cloudinary cloudinary, FichteContext context)
         {
             _context = context;
-        }
-
-        // Создание новой комнаты
-        [HttpPost("create")]
-        public async Task<IActionResult> CreateServer([FromBody] ServerCreateDto serverCreateDto)
-        {
-            // Получение UserId из Claims
-            var userIdClaim = User.Claims.FirstOrDefault(c => c.Type == "UserId");
-
-            if (userIdClaim == null || !int.TryParse(userIdClaim.Value, out int creatorId))
-            {
-                return BadRequest("Invalid CreatorId: User does not exist.");
-            }
-
-            var room = new Room
-            {
-                RoomName = serverCreateDto.ServerName,
-                CreatorId = creatorId,
-                CreatedAt = DateTime.UtcNow,
-                Password = serverCreateDto.Password
-            };
-
-            _context.Rooms.Add(room);
-            await _context.SaveChangesAsync();
-
-            var joinChat = new JoinChatDto
-            {
-                RoomId = room.RoomId
-            };
-
-            await JoinChat(joinChat);
-
-            return Ok(new
-            {
-                ServerName = room.RoomName,
-                RoomId = room.RoomId
-            });
-        }
-
-
-
-        // Отправка сообщения в чат
-        [HttpPost("send-message")]
-        public async Task<IActionResult> SendMessage([FromBody] SendMessageDto sendMessageDto)
-        {
-            // Получение UserId из Claims
-            var userIdClaim = User.Claims.FirstOrDefault(c => c.Type == "UserId");
-
-            if (userIdClaim == null || !int.TryParse(userIdClaim.Value, out int senderId))
-            {
-                return BadRequest("Invalid CreatorId: User does not exist.");
-            }
-
-            var sender = await _context.Users.FindAsync(senderId);
-            if (sender == null)
-            {
-                return NotFound("User not found.");
-            }
-
-            var message = new Message
-            {
-                RoomId = sendMessageDto.RoomId,
-                SenderId = sender.UserId,
-                MessageType = "message",
-                Content = sendMessageDto.Message,
-                SentAt = DateTime.UtcNow
-            };
-
-            _context.Messages.Add(message);
-            await _context.SaveChangesAsync();
-
-            return Ok(new { Success = true });
-        }
-
-        // Загрузка истории сообщений для комнаты
-        [HttpGet("history/{roomId}")]
-        public async Task<IActionResult> GetChatHistory(int roomId)
-        {
-            var messages = await _context.Messages
-                .Where(m => m.RoomId == roomId)
-                .OrderBy(m => m.SentAt)
-                .Select(m => new MessageDto
-                {
-                    UserName = m.Sender.Username,
-                    Content = m.Content,
-                    SentAt = m.SentAt
-                })
-                .ToListAsync();
-
-            return Ok(messages);
+            _cloudinary = cloudinary;
         }
 
         [HttpGet("rooms")]
@@ -142,151 +58,373 @@ namespace RealTimeChat.Controllers
             }
         }
 
-
-        [HttpPost("join-chat")]
-        public async Task<IActionResult> JoinChat([FromBody] JoinChatDto joinChatDto)
+        [HttpGet("userData")]
+        public async Task<IActionResult> GetUserData()
         {
             try
             {
-                // Получение UserId из Claims
                 var userIdClaim = User.Claims.FirstOrDefault(c => c.Type == "UserId");
                 if (userIdClaim == null || !int.TryParse(userIdClaim.Value, out int userId))
                 {
                     return BadRequest("Invalid UserId: User does not exist.");
                 }
 
-                // Проверка существования комнаты
-                var room = await _context.Rooms
-                    .AsNoTracking()
-                    .SingleOrDefaultAsync(r => r.RoomId == joinChatDto.RoomId);
-
-                if (room == null)
-                {
-                    return NotFound("Room not found.");
-                }
-
-                // Проверка существования пользователя
                 var user = await _context.Users
-                    .AsNoTracking()
-                    .SingleOrDefaultAsync(u => u.UserId == userId);
+                    .Where(u => u.UserId == userId)
+                    .Select(u => new
+                    {
+                        u.UserId,
+                        u.Username,
+                        u.Email,
+                        u.IsEmailConfirmed,
+                        u.CreatedAt,
+                        u.Name,
+                        u.Surname,
+                        u.ProfilePicture
+                    })
+                    .FirstOrDefaultAsync();
 
                 if (user == null)
                 {
                     return NotFound("User not found.");
                 }
 
-                // Проверка, если пользователь уже является членом комнаты
-                var existingMembership = await _context.RoomMembers
-                    .AsNoTracking()
-                    .SingleOrDefaultAsync(rm => rm.RoomId == joinChatDto.RoomId && rm.UserId == userId);
-
-                if (existingMembership != null)
-                {
-                    return BadRequest("User is already a member of the room.");
-                }
-
-                // Добавление нового члена комнаты
-                var roomMember = new RoomMember
-                {
-                    RoomId = joinChatDto.RoomId,
-                    UserId = userId,
-                    JoinedAt = DateTime.UtcNow
-                };
-
-                _context.RoomMembers.Add(roomMember);
-                await _context.SaveChangesAsync();
-
-                return Ok(new
-                {
-                    RoomId = roomMember.RoomId,
-                    UserId = roomMember.UserId,
-                    JoinedAt = roomMember.JoinedAt
-                });
+                return Ok(user);
             }
             catch (Exception ex)
             {
-                // Логирование ошибки
                 Console.WriteLine($"Exception: {ex.Message}");
                 return StatusCode(StatusCodes.Status500InternalServerError, "Internal server error");
             }
         }
 
-        [HttpPost("leave-chat")]
-        public async Task<IActionResult> LeaveChat([FromBody] LeaveChatDto leaveChatDto)
+        [HttpPost("uploadAvatar")]
+        public async Task<IActionResult> UploadAvatar(IFormFile avatar)
         {
             try
             {
-                // Получение UserId из Claims
                 var userIdClaim = User.Claims.FirstOrDefault(c => c.Type == "UserId");
                 if (userIdClaim == null || !int.TryParse(userIdClaim.Value, out int userId))
                 {
                     return BadRequest("Invalid UserId: User does not exist.");
                 }
 
-                // Проверка существования связи между пользователем и комнатой
-                var roomMember = await _context.RoomMembers
-                    .SingleOrDefaultAsync(rm => rm.RoomId == leaveChatDto.roomId && rm.UserId == userId);
+                if (avatar == null || avatar.Length == 0)
+                    return BadRequest("No image file provided.");
 
-                if (roomMember == null)
+                // Параметры загрузки для аватара пользователя
+                var uploadParams = new ImageUploadParams
                 {
-                    return BadRequest("User is not a member of the room.");
-                }
+                    File = new FileDescription(avatar.FileName, avatar.OpenReadStream()),
+                    Folder = "FICHTE/Avatars", // Папка в Cloudinary, где будут храниться аватары
+                    Transformation = new Transformation().Width(300).Height(300).Crop("fill").Gravity("face")
+                };
 
-                // Удаление связи
-                _context.RoomMembers.Remove(roomMember);
+                // Загрузка изображения в Cloudinary
+                var uploadResult = await _cloudinary.UploadAsync(uploadParams);
+
+                if (uploadResult.Error != null)
+                    return BadRequest(uploadResult.Error.Message);
+
+                // Сохранение URL аватара в базе данных
+                var user = await _context.Users.FindAsync(userId);
+                if (user == null)
+                    return NotFound("User not found.");
+
+                user.ProfilePicture = uploadResult.SecureUrl.ToString();
+
+                _context.Users.Update(user);
                 await _context.SaveChangesAsync();
 
-                return Ok(new
-                {
-                    RoomId = leaveChatDto.roomId,
-                    UserId = userId,
-                    Message = "You have successfully left the room."
-                });
+                return Ok(new { avatarUrl = user.ProfilePicture });
             }
-            catch (Exception ex)
+            catch (Exception ex) 
             {
-                // Логирование ошибки
                 Console.WriteLine($"Exception: {ex.Message}");
                 return StatusCode(StatusCodes.Status500InternalServerError, "Internal server error");
             }
         }
 
+        [HttpPost("sendMessageFileFetch")]
+        public async Task<IActionResult> SendMessageFileFetch(IFormFile file)
+        {
+            try
+            {
+                var userIdClaim = User.Claims.FirstOrDefault(c => c.Type == "UserId");
+                if (userIdClaim == null || !int.TryParse(userIdClaim.Value, out int userId))
+                {
+                    return BadRequest("Invalid UserId: User does not exist.");
+                }
+
+                if (file == null || file.Length == 0)
+                    return BadRequest("No file provided.");
+
+                // Определяем, является ли файл изображением по расширению
+                var isImage = new[] { ".jpg", ".jpeg", ".png", ".gif", ".bmp", ".webp" }
+                    .Contains(Path.GetExtension(file.FileName).ToLower());
+
+                UploadResult uploadResult;
+
+                if (isImage)
+                {
+                    // Параметры загрузки для изображений
+                    var uploadParams = new ImageUploadParams
+                    {
+                        File = new FileDescription(file.FileName, file.OpenReadStream()),
+                        Folder = "FICHTE/Photos",
+                        Transformation = new Transformation().Width(800).Height(800).Crop("fill").Gravity("auto")
+                    };
+
+                    uploadResult = await _cloudinary.UploadAsync(uploadParams);
+                }
+                else
+                {
+                    // Параметры загрузки для файлов
+                    var uploadParams = new RawUploadParams
+                    {
+                        File = new FileDescription(file.FileName, file.OpenReadStream()),
+                        Folder = "FICHTE/Files"
+                    };
+
+                    uploadResult = await _cloudinary.UploadAsync(uploadParams);
+                }
+
+                if (uploadResult.Error != null)
+                    return BadRequest(uploadResult.Error.Message);
+
+                // Здесь можно сохранить информацию о загруженном файле в базе данных или выполнить другую логику
+                return Ok(new { fileUrl = uploadResult.SecureUrl.ToString() });
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"Exception: {ex.Message}");
+                return StatusCode(StatusCodes.Status500InternalServerError, "Internal server error");
+            }
+        }
+
+
+        [HttpPost ("updateUsername")]
+            public async Task<IActionResult> UpdateUsername(newUsernameDBO newUsernameDBO)
+            {
+                try
+                {
+                    var userIdClaim = User.Claims.FirstOrDefault(u => u.Type == "UserId");
+                    if (userIdClaim == null || !int.TryParse(userIdClaim.Value, out int userId))
+                    {
+                        return BadRequest("Invalid UserId: User does not exist.");
+                    }
+
+                    if(newUsernameDBO.newUsername == null || newUsernameDBO.newUsername.Length == 0) return BadRequest("No new username provided.");
+
+                    if (newUsernameDBO.password == null || newUsernameDBO.password.Length == 0) return BadRequest("No password provided");
+
+
+                    User user = await _context.Users.FindAsync(userId);
+                    if (user == null) return NotFound("User not found.");
+
+                    if (!BCrypt.Net.BCrypt.Verify(newUsernameDBO.password, user.PasswordHash)) return BadRequest("Invalid password");
+
+                    bool usernameExists = await _context.Users.AnyAsync(u => u.Username == newUsernameDBO.newUsername);
+                    if (usernameExists)
+                    {
+                        return BadRequest("Username already in use.");
+                    }
+
+                    user.Username = newUsernameDBO.newUsername;
+
+                    _context.Users.Update(user);
+                    await _context.SaveChangesAsync();
+
+                    return Ok(new { username = user.Username });
+                } 
+                catch (Exception ex) {
+                    Console.WriteLine($"Exception: {ex.Message}");
+                    return StatusCode(StatusCodes.Status500InternalServerError, "Internal server error");
+                }
+            }
+
+        public class newUsernameDBO
+        {
+            public string newUsername { get; set; }
+            public string password { get; set; }
+        }
+
+        [HttpPost("updateName")]
+        public async Task<IActionResult> UpdateName(newNameDBO newNameDBO)
+        {
+            try
+            {
+                var userIdClaim = User.Claims.FirstOrDefault(u => u.Type == "UserId");
+                if (userIdClaim == null || !int.TryParse(userIdClaim.Value, out int userId))
+                {
+                    return BadRequest("Invalid UserId: User does not exist.");
+                }
+
+                if (newNameDBO.newName == null || newNameDBO.newName.Length == 0) return BadRequest("No new name provided.");
+
+                if (newNameDBO.password == null || newNameDBO.password.Length == 0) return BadRequest("No password provided");
+
+
+                User user = await _context.Users.FindAsync(userId);
+                if (user == null) return NotFound("User not found.");
+
+                if (!BCrypt.Net.BCrypt.Verify(newNameDBO.password, user.PasswordHash)) return BadRequest("Invalid password");
+
+                user.Name = newNameDBO.newName;
+
+                _context.Users.Update(user);
+                await _context.SaveChangesAsync();
+
+                return Ok(new { name = user.Name });
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"Exception: {ex.Message}");
+                return StatusCode(StatusCodes.Status500InternalServerError, "Internal server error");
+            }
+        }
+
+        public class newNameDBO
+        {
+            public string newName { get; set; }
+            public string password { get; set; }
+        }
+
+        [HttpPost("updateSurname")]
+        public async Task<IActionResult> UpdateSurname(newSurnameDBO newSurnameDBO)
+        {
+            try
+            {
+                var userIdClaim = User.Claims.FirstOrDefault(u => u.Type == "UserId");
+                if (userIdClaim == null || !int.TryParse(userIdClaim.Value, out int userId))
+                {
+                    return BadRequest("Invalid UserId: User does not exist.");
+                }
+
+                if (newSurnameDBO.newSurname == null || newSurnameDBO.newSurname.Length == 0) return BadRequest("No new surname provided.");
+
+                if (newSurnameDBO.password == null || newSurnameDBO.password.Length == 0) return BadRequest("No password provided");
+
+
+                User user = await _context.Users.FindAsync(userId);
+                if (user == null) return NotFound("User not found.");
+
+                if (!BCrypt.Net.BCrypt.Verify(newSurnameDBO.password, user.PasswordHash)) return BadRequest("Invalid password");
+
+                user.Surname = newSurnameDBO.newSurname;
+
+                _context.Users.Update(user);
+                await _context.SaveChangesAsync();
+
+                return Ok(new { surname = user.Surname });
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"Exception: {ex.Message}");
+                return StatusCode(StatusCodes.Status500InternalServerError, "Internal server error");
+            }
+        }
+
+
+        public class newSurnameDBO
+        {
+            public string newSurname { get; set; }
+            public string password { get; set; }
+        }
+
+        [HttpPost("updateEmail")]
+        public async Task<IActionResult> UpdateEmail(newEmailDBO newEmailDBO)
+        {
+            try
+            {
+                var userIdClaim = User.Claims.FirstOrDefault(u => u.Type == "UserId");
+                if (userIdClaim == null || !int.TryParse(userIdClaim.Value, out int userId))
+                {
+                    return BadRequest("Invalid UserId: User does not exist.");
+                }
+
+                if (newEmailDBO.newEmail == null || newEmailDBO.newEmail.Length == 0) return BadRequest("No new email provided.");
+
+                if (newEmailDBO.password == null || newEmailDBO.password.Length == 0) return BadRequest("No password provided");
+
+
+                User user = await _context.Users.FindAsync(userId);
+                if (user == null) return NotFound("User not found.");
+
+                if (!BCrypt.Net.BCrypt.Verify(newEmailDBO.password, user.PasswordHash)) return BadRequest("Invalid password");
+
+                bool emailExists = await _context.Users.AnyAsync(u => u.Email == newEmailDBO.newEmail);
+                if (emailExists)
+                {
+                    return BadRequest("This email is already in use.");
+                }
+
+                user.Email = newEmailDBO.newEmail;
+
+                _context.Users.Update(user);
+                await _context.SaveChangesAsync();
+
+                return Ok(new { email = user.Email });
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"Exception: {ex.Message}");
+                return StatusCode(StatusCodes.Status500InternalServerError, "Internal server error");
+            }
+        }
+
+        public class newEmailDBO
+        {
+            public string newEmail { get; set; }
+            public string password { get; set; }
+        }
+
+        [HttpPost("updatePassword")]
+        public async Task<IActionResult> UpdatePassword(newPasswordDBO newPasswordDBO)
+        {
+            try
+            {
+                var userIdClaim = User.Claims.FirstOrDefault(u => u.Type == "UserId");
+                if (userIdClaim == null || !int.TryParse(userIdClaim.Value, out int userId))
+                {
+                    return BadRequest("Invalid UserId: User does not exist.");
+                }
+
+                if (string.IsNullOrWhiteSpace(newPasswordDBO.newPassword))
+                    return BadRequest("No new password provided.");
+
+                if (string.IsNullOrWhiteSpace(newPasswordDBO.password))
+                    return BadRequest("No current password provided.");
+
+                User user = await _context.Users.FindAsync(userId);
+                if (user == null) return NotFound("User not found.");
+
+                if (!BCrypt.Net.BCrypt.Verify(newPasswordDBO.password, user.PasswordHash)) return BadRequest("Invalid password");
+
+                if (BCrypt.Net.BCrypt.Verify(newPasswordDBO.newPassword, user.PasswordHash))
+                    return BadRequest("The new password must be different from the current password.");
+
+                user.PasswordHash = BCrypt.Net.BCrypt.HashPassword(newPasswordDBO.newPassword);
+
+                _context.Users.Update(user);
+                await _context.SaveChangesAsync();
+
+                return Ok(new { response = "Password updated" });
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"Exception: {ex.Message}");
+                return StatusCode(StatusCodes.Status500InternalServerError, "Internal server error");
+            }
+        }
+
+        public class newPasswordDBO
+        {
+            public string newPassword { get; set; }
+            public string password { get; set; }
+        }
     }
 
-    // DTO для выхода из комнаты
-    public class LeaveChatDto
-    {
-        public int roomId { get; set; }
-    }
 
-
-    // DTO для присоединения к комнате
-    public class JoinChatDto
-    {
-        public int RoomId { get; set; }
-    }
-
-    // DTO для создания сервера
-    public class ServerCreateDto
-    {
-        public string ServerName { get; set; }
-        public int CreatorId { get; set; }
-        public string? Password { get; set; } // Добавлен пароль
-    }
-
-    // DTO для отправки сообщения
-    public class SendMessageDto
-    {
-        public int RoomId { get; set; }
-        public int UserId { get; set; } // ID пользователя, отправляющего сообщение
-        public string Message { get; set; }
-    }
-
-    // DTO для отображения сообщения
-    public class MessageDto
-    {
-        public string UserName { get; set; }
-        public string Content { get; set; }
-        public DateTime? SentAt { get; set; }
-    }
 }
+

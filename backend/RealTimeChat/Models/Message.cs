@@ -15,7 +15,7 @@ public partial class Message
 
     public string? Content { get; set; }
 
-    public byte[]? FileContent { get; set; }
+    public string? FileContent { get; set; }
 
     public DateTime? SentAt { get; set; }
 

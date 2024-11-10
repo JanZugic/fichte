@@ -1,74 +1,159 @@
-import { useState, useEffect } from "react";
-import { Auth } from "./components/Auth.jsx";
-import { Chat } from "./components/Chat.jsx";
-import { ServerSelection } from "./components/ServerSelection.jsx";
-import { WaitingRoom } from "./components/WaitingRoom.jsx";
-import { ServerCreateMenu } from "./components/ServerCreateMenu.jsx";
+import { useState, useEffect, useCallback } from "react";
+import Cookies from "js-cookie"; // Импортируем библиотеку для работы с куками
+import { Auth } from "./components/Auth";
+import { Chat } from "./components/Chat";
+import { ServerSelection } from "./components/ServerSelection";
+import { WaitingRoom } from "./components/WaitingRoom";
+import { ServerCreateMenu } from "./components/ServerCreateMenu";
 import { HubConnectionBuilder } from "@microsoft/signalr";
+import { Settings } from "./components/Settings";
 
 const App = () => {
     const [connection, setConnection] = useState(null);
     const [messages, setMessages] = useState([]);
-    const [roomId, setChatRoomId] = useState(null); // Использование ID комнаты
-    const [chatRoomName, setChatRoomName] = useState(""); // Для отображения имени комнаты
+    const [roomId, setChatRoomId] = useState(null);
+    const [chatRoomName, setChatRoomName] = useState("");
     const [mode, setMode] = useState("none");
-    const [servers, setServers] = useState([]); // Список серверов
+    const [servers, setServers] = useState([]);
+    const [currentUserName, setCurrentUserName] = useState("");
+    const [user, setUser] = useState(null);
 
-    // Создание подключения и установка обработчиков
-    const initializeConnection = async () => {
+    // Инициализация SignalR соединения
+    const initializeConnection = useCallback(async () => {
+        const token = Cookies.get("authToken"); // Получаем токен из куков
+        if (!token) {
+            console.error("Токен отсутствует. Пожалуйста, войдите в систему.");
+            return;
+        }
+
         try {
             const connection = new HubConnectionBuilder()
                 .withUrl("http://localhost:5022/chat", {
-                    accessTokenFactory: () => localStorage.getItem("authToken"),
+                    accessTokenFactory: () => Cookies.get("authToken"), // Используем токен из куков
                 })
                 .withAutomaticReconnect()
                 .build();
-    
-            connection.on("ReceiveMessage", (userName, message) => {
-                setMessages((prevMessages) => [...prevMessages, { userName, message }]);
+
+            // Получение новых сообщений
+            connection.on("ReceiveMessage", (username, message, avatarUrl, fileUrl) => {
+                const newMessage = {
+                    userName: username,
+                    content: message,
+                    avatarUrl: avatarUrl, // URL аватарки пользователя
+                    sentAt: new Date().toISOString() // Время отправки сообщения
+                };
+            
+                // Проверяем, есть ли ссылка на файл или изображение
+                if (fileUrl) {
+                    // Проверяем расширение файла, чтобы определить, изображение это или другой файл
+                    const imageExtensions = ['.jpg', '.jpeg', '.png', '.gif', '.bmp', '.webp'];
+                    const fileExtension = fileUrl.substring(fileUrl.lastIndexOf('.')).toLowerCase();
+            
+                    if (imageExtensions.includes(fileExtension)) {
+                        // Это изображение, добавляем в объект сообщение с типом "изображение"
+                        newMessage.messageType = "image"
+                        newMessage.fileContent = fileUrl; // Для отображения изображения в компоненте
+                    } else {
+                        // Это обычный файл, добавляем URL файла
+                        newMessage.messageType = "file"
+                        newMessage.fileContent = fileUrl; // Для отображения ссылки на файл в компоненте
+                    }
+                }
+            
+                // Обновляем состояние чата с новыми сообщениями
+                setMessages((prevMessages) => [...prevMessages, newMessage]);
             });
-    
-            connection.on("LoadMessages", (messages) => {
-                setMessages(messages);
+            
+
+            // Пример функции обработки события входа
+            connection.on('UserJoined', (name) => {
+                const systemMessage = {
+                    userName: "System",
+                    content: `${name} joined the chat.`,
+                    sentAt: new Date().toISOString(),
+                    messageFrom: "system" // Важно, чтобы мы отметили, что это системное сообщение
+                };
+                
+                setMessages(prevMessages => [...prevMessages, systemMessage]); // Добавление системного сообщения в состояние
             });
-    
-            connection.onclose((error) => {
-                console.error("SignalR connection closed due to error: ", error);
-                // Optionally, you can add logic to retry connection here
+
+            // Аналогично для выхода
+            connection.on('UserLeft', (name) => {
+                const systemMessage = {
+                    userName: "System",
+                    content: `${name} left the chat.`,
+                    sentAt: new Date().toISOString(),
+                    messageFrom: "system"
+                };
+                
+                setMessages(prevMessages => [...prevMessages, systemMessage]);
             });
-    
-            connection.onreconnecting((error) => {
-                console.warn("SignalR connection lost due to error: ", error);
+
+            
+            // Загрузка истории сообщений
+            connection.on("ChatHistory", (chatHistory) => {
+                setMessages(chatHistory);
             });
-    
-            connection.onreconnected((connectionId) => {
-                console.log("SignalR connection reestablished with connection ID: ", connectionId);
+
+            // Подписываемся на событие UserLeft
+            connection.on("UserLeft", (userId, roomId) => {
+                console.log(`User ${userId} left room: ${roomId}`);
             });
-    
-            await connection.start();
+
+            // Подписка на событие UserJoined
+            connection.on("UserJoined", (userId, roomId) => {
+                console.log(`User ${userId} joined room: ${roomId}`);
+            });
+
+            await connection.start().catch(err => console.error("Ошибка подключения", err));
+            if (connection) {
+                console.log("SignalR Connected.");
+            }
             setConnection(connection);
         } catch (error) {
-            console.error("Connection error:", error);
+            console.error("Ошибка соединения:", error);
         }
-    };
+    }, []);
+
+    const loadUserData = useCallback(async () => {
+        const token = Cookies.get("authToken");
+        if (!token) return;
+        try {
+            const response = await fetch("http://localhost:5022/api/chat/userData", {
+                headers: {
+                    "Authorization": `Bearer ${token}`,
+                },
+            });
+            if (response.ok) {
+                const userData = await response.json();
+                setUser(userData); // Сохраняем данные пользователя в состояние
+                console.log("loadUserData username: " + userData.username);
+            } else {
+                console.error("Не удалось загрузить данные пользователя.");
+            }
+        } catch (error) {
+            console.error("Ошибка при загрузке данных пользователя:", error);
+        }
+    }, []);
+
     // Загрузка серверов
-    const loadServers = async () => {
+    const loadServers = useCallback(async () => {
         try {
             const response = await fetch("http://localhost:5022/api/chat/rooms", {
                 headers: {
-                    "Authorization": `Bearer ${localStorage.getItem("authToken")}`
-                }
+                    "Authorization": `Bearer ${Cookies.get("authToken")}`, // Используем токен из куков
+                },
             });
             if (response.ok) {
                 const serverList = await response.json();
                 setServers(serverList);
             } else {
-                console.error("Failed to load servers.");
+                console.error("Не удалось загрузить серверы.");
             }
         } catch (error) {
-            console.error("Error loading servers:", error);
+            console.error("Ошибка при загрузке серверов:", error);
         }
-    };
+    }, []);
 
     // Обработка аутентификации пользователя
     const handleAuth = async (mode, userData) => {
@@ -81,7 +166,7 @@ const App = () => {
                     },
                     body: JSON.stringify(userData),
                 });
-                alert("Registration successful. You can now log in.");
+                alert("Регистрация прошла успешно. Вы можете войти.");
                 setMode("login");
             } else if (mode === "login") {
                 const response = await fetch("http://localhost:5022/api/auth/login", {
@@ -93,107 +178,212 @@ const App = () => {
                 });
                 if (response.ok) {
                     const { token } = await response.json();
-                    localStorage.setItem("authToken", token);
-                    setMode("waitingRoom"); // Переключаемся на waitingRoom после успешного логина
+                    console.log("Установка режима: waitingRoom после успешного входа.");
+                    Cookies.set("authToken", token, { expires: 7 }); // Устанавливаем куки с токеном на 7 дней
+                    setMode("waitingRoom");
                 } else {
-                    alert("Login failed.");
+                    alert("Ошибка входа.");
                 }
             }
         } catch (error) {
-            console.error("Auth error:", error);
+            console.error("Ошибка аутентификации:", error);
         }
     };
 
     // Обработка подключения к серверу
-    const handleServerConnect = (serverInfo) => {
-        console.log("Connecting to server:", serverInfo);
-        setChatRoomId(serverInfo.roomId); // Установить текущую комнату по ID
-        setChatRoomName(serverInfo.serverName); // Сохранить имя комнаты для отображения
+    const handleServerConnect = async (serverInfo) => {
+        try {
+            // Подписываемся на ответ от сервера
+            connection.on("UserJoined", (userId, roomId) => {
+                console.log(`User ${userId} joined room ${roomId}`);
+            });
 
-        setMode("chat"); // Переключиться на экран чата после подключения
+            // Вызываем метод JoinRoom на сервере
+            const roomInfo = await connection.invoke("JoinRoom", serverInfo.serverName, serverInfo.password);
+            serverInfo = roomInfo;
+            if (roomInfo) {
+                console.log("Successfully joined the chat room.", serverInfo.roomId);
+                setChatRoomName(serverInfo.roomName);
+                setChatRoomId(serverInfo.roomId);
+                setMode("chat");
+                loadServers();
+            }
+        } catch (error) {
+            console.error("Join chat error:", error);
+        }
     };
 
-    // Возвращение к экрану выбора сервера
+    // Обработка создания комнаты
+    const handleServerCreate = async (serverInfo) => {
+        try {
+            // Подписываемся на событие RoomCreated
+            connection.on("RoomCreated", (roomId, createdRoomName) => {
+                console.log(`Room created: ${roomId} - ${createdRoomName}`);
+            });
+
+            // Вызываем метод CreateRoom на сервере
+            const roomInfo = await connection.invoke("CreateRoom", serverInfo.serverName, serverInfo.password);
+            
+            // Убедитесь, что roomInfo не null
+            if (roomInfo) {
+                console.log("Successfully created the chat room.", roomInfo.roomId);
+                handleServerConnect(serverInfo); // Присоединяемся к новой комнате
+            } else {
+                console.error("Failed to create room: roomInfo is null.");
+            }
+        } catch (error) {
+            console.error("Create room error:", error);
+        }
+    };
+    
+
     const handleBackToChatList = () => {
-        setMode("waitingRoom"); // Вернуться в waitingRoom
-    };
-
-    const handleServerCreateMenu = () => {
-        setMode("serverCreate");
+        setMode("waitingRoom");
     };
 
     const handleAddServer = () => {
         setMode("serverSelection");
     };
 
-    // Отправка сообщения в текущую комнату
+    // Отправка сообщения через SignalR Hub
     const sendMessage = async (message) => {
         if (connection && roomId) {
             try {
-                await fetch("http://localhost:5022/api/chat/send-message", {
-                    method: "POST",
-                    headers: {
-                        "Content-Type": "application/json",
-                        "Authorization": `Bearer ${localStorage.getItem("authToken")}`
-                    },
-                    body: JSON.stringify({
-                        RoomId: roomId,
-                        Message: message
-                    })
-                });
+                await connection.invoke("SendMessage", roomId, message);
             } catch (error) {
-                console.error("Send message error:", error);
+                console.error("Ошибка отправки сообщения:", error);
             }
         }
     };
-    
 
-    // Создание нового сервера
-    const handleCreateServer = async (serverInfo) => {
+    const sendMessageFile = async (file) => {
+        const formData = new FormData();
+        formData.append('file', file); // Отправляем только файл
+    
         try {
-            const response = await fetch("http://localhost:5022/api/chat/create", {
-                method: "POST",
+            // Выполняем POST запрос к API для загрузки файла
+            const response = await fetch('http://localhost:5022/api/chat/SendMessageFileFetch', {
+                method: 'POST',
+                body: formData,
                 headers: {
-                    "Content-Type": "application/json",
-                    "Authorization": `Bearer ${localStorage.getItem("authToken")}`
-                },
-                body: JSON.stringify(serverInfo),
+                    "Authorization": `Bearer ${Cookies.get("authToken")}`
+                }
             });
-            if (response.ok) {
-                const result = await response.json();
-                setChatRoomId(result.ServerId); // Сохраняем ID новой комнаты
-                setChatRoomName(result.ServerName); // Имя комнаты для отображения
-                setMode("chat");
-            } else {
-                alert("Failed to create server.");
+    
+            if (!response.ok) {
+                const errorMessage = await response.text();
+                alert(`Error: ${errorMessage}`); // Сообщение об ошибке
+                return;
+            }
+    
+            const data = await response.json(); // Предположим, что data содержит URL файла
+    
+            // Уведомляем пользователей о новом файле через SignalR
+            if (connection && roomId) {
+                try {
+                    // Отправляем URL файла и имя файла через SignalR
+                    await connection.invoke("SendMessageFile", roomId, data.fileUrl, file.name);
+                    console.log("SendMessageFile success");
+                } catch (error) {
+                    console.error("Ошибка отправки файла:", error);
+                    alert('Error notifying users about the new file.'); // Сообщение об ошибке при отправке через SignalR
+                }
             }
         } catch (error) {
-            console.error("Create server error:", error);
+            console.error('Error uploading avatar:', error);
+            alert('Error uploading avatar. Please try again.'); // Сообщение об ошибке загрузки
         }
     };
 
-    // Закрытие чата и сброс состояния
+    // Закрытие чата и отключение от комнаты
     const closeChat = async () => {
-        if (connection) {
+        if (connection && roomId) {
             try {
-                await connection.stop(); // Остановка подключения SignalR
-                setConnection(null);
-                setMessages([]); // Очистка сообщений
-                setChatRoomId(null); // Сброс ID комнаты
-                setChatRoomName(""); // Сброс имени комнаты
-                setMode("waitingRoom"); // Возврат к выбору сервера
+                await connection.invoke("LeaveRoom", roomId);
+                setMessages([]);
+                setChatRoomId(null);
+                setChatRoomName("");
+                setMode("waitingRoom");
             } catch (error) {
-                console.error("Close chat error:", error);
+                console.error("Ошибка закрытия чата:", error);
+            }
+        } else {
+            console.log("Нет активного соединения или отсутствует идентификатор комнаты.");
+        }
+    };
+
+    const handleServerSelect = async (serverInfo) => {
+        // Проверка на наличие соединения
+        if (!connection) {
+            try {
+                await initializeConnection(); // Ждем, пока соединение будет установлено
+            } catch (error) {
+                console.error("Ошибка инициализации соединения:", error);
+                return; // Если инициализация не удалась, выходим из функции
             }
         }
+        
+        // Проверяем, что соединение успешно установлено
+        if (connection) {
+            try {
+                setChatRoomId(serverInfo.roomId);
+                setChatRoomName(serverInfo.roomName);
+                setMode("chat");
+                await reconnectRooms(serverInfo.roomId); // Убедитесь, что повторное подключение также ожидает
+            } catch (error) {
+                console.error("Ошибка при подключении к комнате:", error);
+            }
+        } else {
+            console.error("Не удалось установить соединение с сервером.");
+        }
     };
 
-    // Подключение и загрузка сообщений при авторизации
+    const reconnectRooms = useCallback(async (roomId) => {
+        if (connection) {
+            try {
+                await connection.invoke("ReconnectRoom", roomId);
+            } catch (error) {
+                console.error("Ошибка при повторном присоединении к комнатам:", error);
+            }
+        }
+    }, [connection]);
+
+    
+
+    // Функция для обработки выхода из системы
+    const handleLogout = () => {
+        // Удаляем токен и имя пользователя из куков
+        Cookies.remove("authToken");
+        Cookies.remove("username");
+
+        // Сбрасываем состояние приложения
+        setCurrentUserName("");
+        setMessages([]);
+        setChatRoomId(null);
+        setChatRoomName("");
+        setMode("none"); // Устанавливаем режим обратно в "none" для показа экрана аутентификации
+
+        // Отключаемся от сервера, если соединение активно
+       if (connection) {
+            connection.stop()
+                .then(() => {
+                    console.log("Disconnected from SignalR.");
+                    setConnection(null); // Reset the connection state
+                })
+                .catch(err => console.error("Error disconnecting:", err));
+        }
+    };
+
+    const handleSettings = () => {
+        setMode("settings");
+    }
+
+    // Инициализация соединения при переходе в чат
     useEffect(() => {
-        if (mode === "chat" && !connection) {
+        if (!connection) {
             initializeConnection();
         }
-    }, [mode]);
+    }, [initializeConnection]);
 
     // Загрузка истории сообщений при подключении к комнате
     useEffect(() => {
@@ -203,12 +393,26 @@ const App = () => {
         }
     }, [roomId, connection]);
 
-    // Загрузка серверов при переходе в режим выбора сервера
+    // Загрузка серверов при открытии waitingRoom
+    useEffect(() => {
+        const token = Cookies.get("authToken");
+
+        if (token) {
+            loadUserData();
+            setMode("waitingRoom");
+            loadServers();
+            initializeConnection();
+        }
+    }, [loadUserData, loadServers, initializeConnection]);
+
     useEffect(() => {
         if (mode === "waitingRoom") {
+            console.log("Вход в режим waitingRoom через useEffect (переключение mode).");
+            loadUserData();
             loadServers();
+            initializeConnection();
         }
-    }, [mode]);
+    }, [mode, loadServers, initializeConnection]);
 
     return (
         <div className="min-h-screen flex items-center justify-center bg-gray-100">
@@ -217,34 +421,50 @@ const App = () => {
                 <WaitingRoom
                     servers={servers}
                     chatRoom={chatRoomName}
-                    onServerSelect={handleServerConnect}
+                    onServerSelect={handleServerSelect}
                     onBackToSelection={handleAddServer}
+                    onLogout={handleLogout}
+                    onSettings={handleSettings}
                 />
             )}
             {mode === "serverSelection" && (
                 <ServerSelection
-                    onServerCreateMenu={handleServerCreateMenu}
+                    onServerCreateMenu={() => setMode("serverCreate")}
                     onConnect={handleServerConnect}
                     onBack={handleBackToChatList}
                 />
             )}
             {mode === "serverCreate" && (
                 <ServerCreateMenu
-                    onCreate={handleCreateServer}
-                    onBack={handleServerConnect}
+                    onCreate={handleServerCreate}
+                    onBack={handleBackToChatList}
                 />
             )}
             {mode === "chat" && (
                 <Chat
                     servers={servers}
-                    onServerSelect={handleServerConnect}
+                    onServerSelect={handleServerSelect}
                     onBackToSelection={handleAddServer}
                     messages={messages}
                     sendMessage={sendMessage}
+                    sendMessageFile={sendMessageFile}
                     closeChat={closeChat}
                     chatRoom={chatRoomName}
                     roomId={roomId}
-                    setChatRoom={setChatRoomName}
+                    user={user}
+                    onLogout={handleLogout}
+                    onSettings={handleSettings}
+                />
+            )}
+            {mode === "settings" && (
+                <Settings
+                    user={user}
+                    servers={servers}
+                    chatRoom={chatRoomName}
+                    onServerSelect={handleServerSelect}
+                    onBackToSelection={handleAddServer}
+                    onLogout={handleLogout}
+                    onSettings={handleSettings}
                 />
             )}
         </div>
